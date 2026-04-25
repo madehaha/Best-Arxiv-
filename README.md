@@ -1,5 +1,7 @@
 以下是详细的README文档，包含功能介绍、安装配置和使用方法：
 
+![image](./446b1d12d96881fe8db5043f3106b5d1.png)
+
 ```markdown
 # Arxiv高级搜索与论文总结工具
 
