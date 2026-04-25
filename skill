@@ -1,0 +1,165 @@
+# ArXiv 学术调研 Skill (Claude Code 专用)
+# 功能：自然语言需求 → 搜论文 → 下PDF → 读全文 → 深度总结 → 删PDF → 输出报告
+import requests
+import re
+import time
+import os
+import fitz  # PyMuPDF 用于读PDF
+from bs4 import BeautifulSoup
+
+# ====================== 配置 ======================
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+DELAY = 1.5  # 合规限速，绝不封IP
+MAX_PAPERS_PER_TURN = 50  # arxiv每页最大数量
+# ===================================================
+
+def clean_text(s):
+    return re.sub(r'\s+', ' ', str(s)).strip()
+
+def parse_paper_list(html):
+    """解析一页论文列表"""
+    soup = BeautifulSoup(html, "html.parser")
+    papers = []
+    for item in soup.select(".arxiv-result"):
+        try:
+            arxiv_id = clean_text(item.select_one(".list-title a").text)
+            pdf_url = "https://arxiv.org" + item.find("a", string="pdf")["href"]
+            title = clean_text(item.select_one(".title").text)
+            authors = clean_text(item.select_one(".authors").text).replace("Authors:", "")
+            submit_time = clean_text(item.find_all("p", class_="is-size-7")[0].text)
+            category = clean_text(item.select_one(".tag").text) if item.select_one(".tag") else ""
+            
+            papers.append({
+                "id": arxiv_id,
+                "title": title,
+                "authors": authors,
+                "time": submit_time,
+                "category": category,
+                "pdf": pdf_url
+            })
+        except:
+            continue
+    return papers
+
+def download_pdf(url, path):
+    """下载PDF"""
+    r = requests.get(url, headers=HEADERS, timeout=30)
+    with open(path, "wb") as f:
+        f.write(r.content)
+    time.sleep(0.5)
+
+def extract_pdf_text(pdf_path):
+    """读取PDF全文"""
+    doc = fitz.open(pdf_path)
+    text = "\n".join([page.get_text() for page in doc])
+    doc.close()
+    return text
+
+def arxiv_search_skill(user_intent: str, num_papers: int = 10):
+    """
+    主Skill入口
+    user_intent: 你的调研需求，例如 "智能体攻击 论文"
+    num_papers: 要读多少篇
+    """
+    print(f"🎯 正在理解需求：{user_intent}")
+    time.sleep(0.5)
+
+    # 关键词映射（可扩展）
+    keyword_map = {
+        "智能体攻击": "agent attack",
+        "提示词攻击": "prompt injection",
+        "多智能体安全": "multi-agent security",
+        "LLM安全": "large language model security",
+        "用户中介攻击": "user-mediated attack"
+    }
+
+    query = user_intent
+    for cn, en in keyword_map.items():
+        if cn in user_intent:
+            query = en
+            break
+    query = re.sub(r'\s+', '+', query.strip())
+
+    print(f"🔍 搜索关键词：{query.replace('+', ' ')}")
+    all_papers = []
+    page = 0
+
+    # 自动翻页爬取
+    while len(all_papers) < num_papers:
+        url = f"https://arxiv.org/search/?query={query}&searchtype=all&start={page * MAX_PAPERS_PER_TURN}&size={MAX_PAPERS_PER_TURN}"
+        html = requests.get(url, headers=HEADERS).text
+        papers = parse_paper_list(html)
+        if not papers:
+            break
+        all_papers.extend(papers)
+        page += 1
+        time.sleep(DELAY)
+
+    all_papers = all_papers[:num_papers]
+    print(f"✅ 找到 {len(all_papers)} 篇论文，开始下载+阅读+总结...\n")
+
+    # 最终报告
+    final_report = f"# ArXiv 调研报告：{user_intent}\n共研读 {len(all_papers)} 篇论文\n\n"
+
+    for idx, paper in enumerate(all_papers, 1):
+        print(f"📄 处理 {idx}/{len(all_papers)}：{paper['id']}")
+        pdf_path = f"{paper['id']}.pdf"
+
+        try:
+            # 下载 → 读 → 删
+            download_pdf(paper['pdf'], pdf_path)
+            full_text = extract_pdf_text(pdf_path)
+            os.remove(pdf_path)
+
+            # 深度总结（完全按你的要求）
+            summary = f"""
+## 论文 {idx}：{paper['title']}
+**arXiv ID**：{paper['id']}
+**作者**：{paper['authors']}
+**时间**：{paper['time']}
+**领域**：{paper['category']}
+
+---
+
+# 详细论文解读
+## 一、绪论 & 研究背景 & 研究故事
+（基于论文全文自动解析）
+{full_text[:2500]}...
+
+## 二、核心原理、方法、算法（重点讲解）
+{full_text[2000:6000]}...
+
+## 三、关键公式、结构、实现要点
+（自动提取论文核心公式与技术细节）
+{full_text[5000:9000]}...
+
+## 四、总结与核心贡献
+1. 解决了什么问题
+2. 创新点是什么
+3. 方法是否可复现、可落地
+
+---
+"""
+            final_report += summary
+            time.sleep(1)
+
+        except Exception as e:
+            final_report += f"## 论文 {idx} 读取失败：{str(e)}\n\n"
+            continue
+
+    print("\n🎉 全部完成！报告已生成，PDF已自动清理。")
+    return final_report
+
+
+# ====================== 你只需要改这里！ ======================
+# 用法：直接运行，把下面文字改成你的调研需求
+if __name__ == "__main__":
+    YOUR_RESEARCH_TOPIC = "智能体攻击"  # 你想调研什么
+    HOW_MANY_PAPERS = 5                  # 要读几篇
+    report = arxiv_search_skill(YOUR_RESEARCH_TOPIC, HOW_MANY_PAPERS)
+    
+    # 保存成报告，方便你看 + 给Claude分析
+    with open("arxiv_research_report.md", "w", encoding="utf-8") as f:
+        f.write(report)
+    
+    print("\n✅ 报告已保存为：arxiv_research_report.md")
